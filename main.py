@@ -1,35 +1,34 @@
 """
-Video Generator - Main Script
-สแกน Google Drive หาวิดีโอต้นฉบับ → Generate วิดีโอใหม่ด้วย Magic Hour API → Upload กลับ Google Drive
+Video Generator - Magic Hour SDK
+สแกน Google Drive → extract frame → Image-to-Video ด้วย Magic Hour → Upload กลับ Drive
 """
 
 import os
-import time
 import json
+import time
 import logging
+import subprocess
 import requests
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
-import tempfile
+from magic_hour import Client
 
 # ==================== CONFIG ====================
-SOURCE_FOLDER_ID  = os.environ.get("GDRIVE_SOURCE_FOLDER_ID")
-OUTPUT_FOLDER_ID  = os.environ.get("GDRIVE_OUTPUT_FOLDER_ID")
-MAGIC_HOUR_KEY    = os.environ.get("MAGIC_HOUR_API_KEY")
+SOURCE_FOLDER_ID   = os.environ.get("GDRIVE_SOURCE_FOLDER_ID")
+OUTPUT_FOLDER_ID   = os.environ.get("GDRIVE_OUTPUT_FOLDER_ID")
+MAGIC_HOUR_KEY     = os.environ.get("MAGIC_HOUR_API_KEY")
 GDRIVE_CREDENTIALS = os.environ.get("GDRIVE_CREDENTIALS_JSON")
-
-MAGIC_HOUR_BASE   = "https://api.magichour.ai/api/developer/v1"
 
 PROMPT = (
     "A beautiful young Thai woman, elegant and attractive, "
     "holding and showcasing the product with a bright smile, "
-    "same product as original video, same action and movements, "
+    "same product as original, same movements, "
     "clean bright background, natural studio lighting, "
-    "vertical video format for TikTok/Reels/Shorts, "
-    "professional product showcase style, high quality"
+    "vertical TikTok format, professional product showcase"
 )
 
 # ==================== LOGGING ====================
@@ -53,7 +52,7 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds)
 
 def list_videos_in_folder(service, folder_id):
-    log.info(f"กำลังสแกน folder...")
+    log.info("กำลังสแกน source folder...")
     results = service.files().list(
         q=f"'{folder_id}' in parents and mimeType contains 'video/' and trashed=false",
         fields="files(id, name, size)"
@@ -74,86 +73,53 @@ def download_video(service, file_id, file_name, tmp_dir):
     log.info(f"Downloaded: {file_name}")
     return file_path
 
-def upload_video(service, file_path, folder_id, file_name):
+def upload_video_to_drive(service, file_path, folder_id, file_name):
     log.info(f"Uploading to Drive: {file_name}")
     file_metadata = {"name": file_name, "parents": [folder_id]}
     media = MediaFileUpload(file_path, mimetype="video/mp4", resumable=True)
     file = service.files().create(
         body=file_metadata, media_body=media, fields="id, name"
     ).execute()
-    log.info(f"Uploaded: {file['name']} (ID: {file['id']})")
+    log.info(f"Uploaded: {file['name']}")
     return file
 
-# ==================== MAGIC HOUR API ====================
-def get_upload_url(file_name):
-    """ขอ pre-signed URL สำหรับ upload วิดีโอต้นฉบับ"""
-    headers = {"Authorization": f"Bearer {MAGIC_HOUR_KEY}", "Content-Type": "application/json"}
-    resp = requests.post(
-        f"{MAGIC_HOUR_BASE}/asset-storage",
-        headers=headers,
-        json={"files": [{"name": file_name, "type": "video/mp4"}]}
+# ==================== VIDEO PROCESSING ====================
+def extract_frame(video_path, output_path, second=1):
+    """Extract frame จากวิดีโอด้วย ffmpeg"""
+    log.info(f"Extracting frame from {video_path}...")
+    cmd = ["ffmpeg", "-i", video_path, "-ss", str(second), "-frames:v", "1", "-q:v", "2", output_path, "-y"]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise Exception(f"ffmpeg error: {result.stderr}")
+    log.info(f"Frame extracted: {output_path}")
+    return output_path
+
+# ==================== MAGIC HOUR ====================
+def generate_video_from_image(image_path, output_name):
+    """Generate วิดีโอจาก image ด้วย Magic Hour SDK"""
+    log.info(f"Generating video: {output_name}")
+    client = Client(token=MAGIC_HOUR_KEY)
+
+    response = client.v1.image_to_video.generate(
+        assets={"image_file_path": image_path},
+        end_seconds=5,
+        model="ltx-2.3",
+        name=output_name,
+        resolution="720p",
+        style={"prompt": PROMPT},
+        wait_for_completion=True,
+        download_outputs=True,
+        download_directory=str(Path(image_path).parent)
     )
-    resp.raise_for_status()
-    data = resp.json()
-    return data["files"][0]["uploadUrl"], data["files"][0]["downloadUrl"]
 
-def upload_to_magic_hour(file_path, file_name):
-    """Upload วิดีโอต้นฉบับไปที่ Magic Hour storage"""
-    log.info(f"Getting upload URL from Magic Hour...")
-    upload_url, download_url = get_upload_url(file_name)
-    log.info(f"Uploading to Magic Hour storage...")
-    with open(file_path, "rb") as f:
-        put_resp = requests.put(upload_url, data=f, headers={"Content-Type": "video/mp4"})
-        put_resp.raise_for_status()
-    log.info(f"Uploaded to Magic Hour: {download_url}")
-    return download_url
+    log.info(f"Status: {response.status}")
+    if response.status != "complete":
+        raise Exception(f"Generation failed: {response.status}")
 
-def create_video_job(video_url):
-    """สร้าง video-to-video job ใน Magic Hour"""
-    headers = {"Authorization": f"Bearer {MAGIC_HOUR_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "video_source": {"type": "url", "url": video_url},
-        "prompt": PROMPT,
-        "style": "realistic",
-        "output_format": "mp4",
-        "aspect_ratio": "9:16",
-        "duration": 5
-    }
-    resp = requests.post(
-        f"{MAGIC_HOUR_BASE}/video-to-video",
-        headers=headers,
-        json=payload
-    )
-    resp.raise_for_status()
-    job_id = resp.json()["id"]
-    log.info(f"Job created: {job_id}")
-    return job_id
-
-def wait_for_job(job_id, timeout=600):
-    """รอจนกว่า job จะเสร็จ"""
-    headers = {"Authorization": f"Bearer {MAGIC_HOUR_KEY}"}
-    start = time.time()
-    while time.time() - start < timeout:
-        resp = requests.get(f"{MAGIC_HOUR_BASE}/video-projects/{job_id}", headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        status = data.get("status")
-        log.info(f"  Status: {status}")
-        if status == "complete":
-            return data["downloads"][0]["url"]
-        elif status in ("failed", "error"):
-            raise Exception(f"Job failed: {data}")
-        time.sleep(15)
-    raise Exception("Timeout waiting for video generation")
-
-def download_generated_video(video_url, output_path):
-    log.info(f"Downloading generated video...")
-    response = requests.get(video_url, stream=True)
-    response.raise_for_status()
-    with open(output_path, "wb") as f:
-        for chunk in response.iter_content(chunk_size=8192):
-            f.write(chunk)
-    log.info(f"Saved: {output_path}")
+    # หาไฟล์ที่ download มา
+    if response.downloaded_paths:
+        return response.downloaded_paths[0]
+    raise Exception("No output file downloaded")
 
 # ==================== MAIN ====================
 def main():
@@ -182,29 +148,24 @@ def main():
                 # 1. Download จาก Google Drive
                 source_path = download_video(service, video_id, video_name, tmp_dir)
 
-                # 2. Upload ไปที่ Magic Hour
-                mh_url = upload_to_magic_hour(source_path, video_name)
+                # 2. Extract frame แรก
+                frame_path = os.path.join(tmp_dir, f"{Path(video_name).stem}_frame.jpg")
+                extract_frame(source_path, frame_path, second=1)
 
-                # 3. สร้าง generation job
-                job_id = create_video_job(mh_url)
+                # 3. Generate วิดีโอใหม่
+                output_name = f"gen_{Path(video_name).stem}_{datetime.now().strftime('%Y%m%d')}"
+                generated_path = generate_video_from_image(frame_path, output_name)
 
-                # 4. รอผลลัพธ์
-                output_name = f"generated_{Path(video_name).stem}_{datetime.now().strftime('%Y%m%d')}.mp4"
-                generated_url = wait_for_job(job_id)
-
-                # 5. Download วิดีโอที่ generate แล้ว
-                output_path = os.path.join(tmp_dir, output_name)
-                download_generated_video(generated_url, output_path)
-
-                # 6. Upload ขึ้น Google Drive output folder
-                upload_video(service, output_path, OUTPUT_FOLDER_ID, output_name)
+                # 4. Upload ขึ้น Google Drive
+                out_filename = f"{output_name}.mp4"
+                upload_video_to_drive(service, generated_path, OUTPUT_FOLDER_ID, out_filename)
 
                 success_count += 1
-                log.info(f"สำเร็จ: {video_name} → {output_name}")
+                log.info(f"สำเร็จ: {video_name} -> {out_filename}")
 
             except Exception as e:
                 fail_count += 1
-                log.error(f"Error processing {video_name}: {str(e)}")
+                log.error(f"Error: {video_name}: {str(e)}")
                 continue
 
     log.info(f"\n{'='*50}")
