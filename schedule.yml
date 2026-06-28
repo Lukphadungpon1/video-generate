@@ -1,0 +1,46 @@
+name: 🎬 Daily Video Generator
+
+on:
+  schedule:
+    # ตี 1 เวลาไทย = 18:00 UTC (Thailand = UTC+7)
+    - cron: '0 18 * * *'
+  
+  # รันมือได้ด้วย (ทดสอบ)
+  workflow_dispatch:
+
+jobs:
+  generate-videos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # max 2 ชั่วโมง
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 📁 Create logs directory
+        run: mkdir -p logs
+
+      - name: 🚀 Run Video Generator
+        env:
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          GDRIVE_SOURCE_FOLDER_ID: ${{ secrets.GDRIVE_SOURCE_FOLDER_ID }}
+          GDRIVE_OUTPUT_FOLDER_ID: ${{ secrets.GDRIVE_OUTPUT_FOLDER_ID }}
+          GDRIVE_CREDENTIALS_JSON: ${{ secrets.GDRIVE_CREDENTIALS_JSON }}
+        run: python main.py
+
+      - name: 📤 Upload logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 7
