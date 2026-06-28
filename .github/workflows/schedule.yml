@@ -1,4 +1,4 @@
-name: 🎬 Daily Video Generator
+name: Daily Video Generator
 
 on:
   schedule:
