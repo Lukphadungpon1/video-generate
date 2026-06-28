@@ -26,12 +26,15 @@ jobs:
       - name: 📦 Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
+        
       - name: 📁 Create logs directory
         run: mkdir -p logs
 
       - name: 🚀 Run Video Generator
         env:
-          FAL_KEY: ${{ secrets.FAL_KEY }}
+          MAGIC_HOUR_API_KEY: ${{ secrets.MAGIC_HOUR_API_KEY }}
           GDRIVE_SOURCE_FOLDER_ID: ${{ secrets.GDRIVE_SOURCE_FOLDER_ID }}
           GDRIVE_OUTPUT_FOLDER_ID: ${{ secrets.GDRIVE_OUTPUT_FOLDER_ID }}
           GDRIVE_CREDENTIALS_JSON: ${{ secrets.GDRIVE_CREDENTIALS_JSON }}
