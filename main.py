@@ -78,7 +78,7 @@ def upload_video_to_drive(service, file_path, folder_id, file_name):
     file_metadata = {"name": file_name, "parents": [folder_id]}
     media = MediaFileUpload(file_path, mimetype="video/mp4", resumable=True)
     file = service.files().create(
-        body=file_metadata, media_body=media, fields="id, name"
+        body=file_metadata, media_body=media, fields="id, name", supportsAllDrives=True
     ).execute()
     log.info(f"Uploaded: {file['name']}")
     return file
