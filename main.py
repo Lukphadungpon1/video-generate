@@ -102,7 +102,7 @@ def generate_video_from_image(image_path, output_name):
 
     response = client.v1.image_to_video.generate(
         assets={"image_file_path": image_path},
-        end_seconds=3,
+        end_seconds=1,
         model="ltx-2.3",
         name=output_name,
         resolution="480p",
