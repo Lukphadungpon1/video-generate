@@ -105,7 +105,7 @@ def generate_video_from_image(image_path, output_name):
         end_seconds=5,
         model="ltx-2.3",
         name=output_name,
-        resolution="720p",
+        resolution="480p",
         style={"prompt": PROMPT},
         wait_for_completion=True,
         download_outputs=True,
